@@ -52,7 +52,7 @@ clothing_brands = ["Louis Vuitton",
                     "Adidas"]
 
 
-clothing_brands = ["Nike"]
+# clothing_brands = ["Nike"]
 
 EXCLUDE_TITLES = ["Shop on eBay"]
 
@@ -211,6 +211,7 @@ if __name__ == "__main__":
     print("EBAY CLOTHING BRAND RESEARCH - MULTITHREADED")
     print("=" * 50)
     
+    
     # Run multithreaded search
     while clothing_brands != []:
         all_results = search_all_clothing_brands_multithreaded(clothing_brands, max_workers=max_workers, per_page=per_page)
@@ -220,12 +221,15 @@ if __name__ == "__main__":
     print("=" * 50)
     
     total_items = 0
+    categorize_items_summaries = []
     for brand, sale_info in all_results.items():
         item_count = len(sale_info)
         total_items += item_count
         print(f"{brand}: {item_count} items")
-        categorize_items = categorize_items(sale_info)
-        pp.pprint(categorize_items)
+        categorize_items_info = categorize_items(sale_info)
+        categorize_items_summaries.append(categorize_items_info)
+    
+    pp.pprint(categorize_items_summaries)
     
     
     print(f"\nTotal items found across all brands: {total_items}")

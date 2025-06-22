@@ -3,8 +3,28 @@
 import re
 import concurrent.futures
 import threading
+import pprint as pp
 from time import sleep
 from playwright.sync_api import Playwright, sync_playwright, expect
+from collections import defaultdict
+
+
+clothing_product_groups = {
+    'Shoes/Sneakers': ['shoes', 'sneakers', 'trainers', 'footwear', 'running', 'basketball', 'tennis', 'cleats', 'boots'],
+    'T-Shirts/Tops/Tank Tops': ['t-shirt', 'tee', 'top', 'tank top', 'tank', 'blouse', 'tunic'],
+    'Shorts': ['shorts', 'short'],
+    'Pants/Joggers/Sweatpants/Track Pants': ['pants', 'joggers', 'sweatpants', 'track pants', 'leggings', 'tights', 'trousers'],
+    'Hoodies/Sweatshirts/Pullovers': ['hoodie', 'sweatshirt', 'pullover', 'sweater', 'fleece'],
+    'Jackets/Windbreakers/Rain Jackets': ['jacket', 'windbreaker', 'rain jacket', 'coat', 'blazer', 'vest'],
+    'Polo Shirts/Golf Shirts': ['polo', 'golf shirt', 'polo shirt'],
+    'Skirts/Skorts/Boardskirts': ['skirt', 'skort', 'boardskirt'],
+    'Socks': ['socks', 'sock', 'ankle socks', 'crew socks'],
+    'Slides/Sandals': ['slides', 'sandals', 'flip flops', 'slippers'],
+    'Rompers': ['romper', 'jumpsuit', 'playsuit'],
+    'Duffle Bags/Handbags': ['duffle bag', 'handbag', 'bag', 'backpack', 'tote', 'purse', 'duffel'],
+    'Hats/Caps': ['hat', 'cap', 'beanie', 'snapback', 'baseball cap', 'bucket hat'],
+    'Key Chains/Accessories': ['keychain', 'key chain', 'accessories', 'wallet', 'belt', 'watch', 'jewelry']
+}
 
 clothing_brands = ["Louis Vuitton",
                     "Nike",
@@ -36,6 +56,71 @@ clothing_brands = ["Nike"]
 
 EXCLUDE_TITLES = ["Shop on eBay"]
 
+def serialize_price_to_float(price_str):
+    """Convert price string to float, handling various formats"""
+    if not price_str or price_str == 'N/A':
+        return 0.0
+    
+    # Remove $ and clean the string
+    cleaned = str(price_str).replace('$', '').replace(',', '').strip()
+    
+    # Handle price ranges (take the lower price)
+    if ' to ' in cleaned:
+        lower_price = cleaned.split(' to ')[0].strip()
+        try:
+            return float(lower_price)
+        except ValueError:
+            return 0.0
+    
+    # Handle "or Best Offer" or similar text
+    if ' or ' in cleaned.lower():
+        price_part = cleaned.split(' or ')[0].strip()
+        try:
+            return float(price_part)
+        except ValueError:
+            return 0.0
+    
+    # Handle regular prices
+    try:
+        return float(cleaned)
+    except ValueError:
+        # Extract first number if string contains other text
+        import re
+        numbers = re.findall(r'\d+\.?\d*', cleaned)
+        if numbers:
+            try:
+                return float(numbers[0])
+            except ValueError:
+                return 0.0
+        return 0.0
+
+
+def categorize_items(items):
+    groups = defaultdict(list)
+    
+    for item in items:
+        title_lower = item['title'].lower()
+        categorized = False
+        
+        # Check each category
+        for category, keywords in clothing_product_groups.items():
+            if any(keyword in title_lower for keyword in keywords):
+                groups[category].append(item)
+                categorized = True
+                break
+        
+        # If no category found, put in 'Other Nike Items'
+        if not categorized:
+            groups['Other Nike Items'].append(item)
+    
+    for category in groups:
+        # Sort items in each category by title
+        groups[category] = sorted(groups[category], key=lambda x: x['title'].lower())
+        groups[category].append({"average_price": round(sum(item['price'] for item in groups[category]) / len(groups[category]),2) if groups[category] else 0.0})
+        groups[category].append({"total_items": len(groups[category]) - 1 })
+
+    
+    return dict(groups)
 
 def get_sold_items_for_brand(brand: str, per_page: int = 240, n_retries: int = 0) -> list:
     """Get sold items for a specific brand using its own browser instance"""
@@ -46,25 +131,39 @@ def get_sold_items_for_brand(brand: str, per_page: int = 240, n_retries: int = 0
         
         try:
             url = f"https://www.ebay.com/sch/i.html?_nkw={brand}&_sacat=11450&_from=R40&rt=nc&LH_Sold=1&LH_Complete=1&_ipg={per_page}"
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.goto(url)
             
-            titles = []
+            listings = []
 
-            title_elements = page.locator('li.s-item .s-item__title').all()[:per_page]
+            sold_items = page.locator('li.s-item').all()[:per_page]
+
             
-            for title_element in title_elements:
-                if title_element.inner_text() in EXCLUDE_TITLES:
+            for item in sold_items:
+                title = item.locator('.s-item__title').first.text_content()
+                price = item.locator('.s-item__price').first.text_content()
+                link = item.locator('.s-item__link').first.get_attribute('href')
+                short_link = re.search(r'/itm/(\d+)', link)
+
+
+                if title in EXCLUDE_TITLES:
                     continue
-                title_text = title_element.inner_text()
-                titles.append(title_text)
+
+
+                if short_link:
+                    item_id = short_link.group(1)
+                    link = f"https://www.ebay.com/itm/{item_id}"
+
+
+                listings.append({"title":title, "price": serialize_price_to_float(price), "link": link})
+                
+                
             
             
-            if len(titles) > 0:
-                print(f"✓ Completed {brand}: Found {len(titles)} items")
-                print(f"Removing {brand} from list as items found")
+            if len(listings) > 0:
+                print(f"✓ Completed {brand}: Found {len(listings)} items")
                 clothing_brands.remove(brand)  # Remove brand from list if items found
 
-            return titles
+            return listings
             
         except Exception as e:
             print(f"✗ Error with {brand}: {str(e)}")
@@ -121,11 +220,13 @@ if __name__ == "__main__":
     print("=" * 50)
     
     total_items = 0
-    for brand, titles in all_results.items():
-        item_count = len(titles)
+    for brand, sale_info in all_results.items():
+        item_count = len(sale_info)
         total_items += item_count
         print(f"{brand}: {item_count} items")
-        print(titles)
+        categorize_items = categorize_items(sale_info)
+        pp.pprint(categorize_items)
+    
     
     print(f"\nTotal items found across all brands: {total_items}")
     print(f"Brands searched: {len(all_results)}")
